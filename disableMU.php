@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name: DisableMU
+ * Plugin Name: Disable MU
  * Plugin URI: http://www.binarytemplar.com/disableMU
  * Description: Tricks WordPress into being unable to find the /mu-plugins directory by redefining the location to an invalid directory path. Simply deactivate this plugin to undo this change.
- * Version: 1.0
+ * Version: 1.1
  * Author: Dave McHale
  * Author URI: http://www.binarytemplar.com
  * License: GPL2+
@@ -27,6 +27,7 @@
 
 register_activation_hook( __FILE__, 'disableMU_activate' );
 register_deactivation_hook( __FILE__, 'disableMU_deactivate' );
+
 
 /**
  * Activation function
@@ -80,11 +81,16 @@ function disableMU_send_error($str) {
 function disableMU_add_to_config() {
     $disableMU_random_string = disableMU_generate_random_string(20);
 
-    $disableMU_disableText = "" . PHP_EOL . PHP_EOL;
+    $currentUrl = (isset($_SERVER['HTTPS'])) ? 'https://' : 'http://';
+    $currentUrl .= $_SERVER['HTTP_HOST'];
+
+    // We are already checking to see if wp-config.php contains any of these variables before writing to the file.
+    // By design, we leave the "if (isDefined(CONST))" statements out here in order to ensure that OUR values are set
+    $disableMU_disableText = "" . PHP_EOL;
     $disableMU_disableText .= "// Definitions by DisableMU plugin" . PHP_EOL;
-    $disableMU_disableText .= "if ( !defined('WPMU_PLUGIN_DIR') ) { define( 'WPMU_PLUGIN_DIR', WP_CONTENT_DIR . '/mu-$disableMU_random_string' ); }" . PHP_EOL;
-    $disableMU_disableText .= "if ( !defined('WPMU_PLUGIN_URL') ) { define( 'WPMU_PLUGIN_URL', WP_CONTENT_URL . '/mu-$disableMU_random_string' ); }" . PHP_EOL;
-    $disableMU_disableText .= "if ( !defined( 'MUPLUGINDIR' ) ) { define( 'MUPLUGINDIR', 'wp-content/mu-$disableMU_random_string' ); }" . PHP_EOL;
+    $disableMU_disableText .= "define( 'WPMU_PLUGIN_DIR', ABSPATH . 'wp-content/plugins/mu-$disableMU_random_string' );" . PHP_EOL;
+    $disableMU_disableText .= "define( 'WPMU_PLUGIN_URL', '$currentUrl/wp-content/mu-$disableMU_random_string' );" . PHP_EOL;
+    $disableMU_disableText .= "define( 'MUPLUGINDIR', 'wp-content/mu-$disableMU_random_string' );" . PHP_EOL;
     $disableMU_disableText .= "// END Definitions by DisableMU plugin" . PHP_EOL;
 
     $edit_file_config_entry_exists = false;
@@ -94,11 +100,16 @@ function disableMU_add_to_config() {
 
     //Get wp-config.php file contents so we can check if our stuff already exists
     $config_contents = file($config_file);
+    $abspath_line_num = 0;
 
     foreach ($config_contents as $line_num => $line) {
         if ((strpos($line, "'WPMU_PLUGIN_DIR'")) || (strpos($line, "'WPMU_PLUGIN_URL'")) || (strpos($line, "'MUPLUGINDIR'"))) {
             disableMU_send_error(__('wp-config.php is already manually defining the path to mu-plugins. No changes were made.', 'disablemu'));
             return false;
+        }
+
+        if (strpos($line, "define('ABSPATH'")) {
+            $abspath_line_num = $line_num;
         }
 
         //For wp-config.php files originating from early WP versions we will remove the closing php tag
@@ -108,7 +119,14 @@ function disableMU_add_to_config() {
     }
 
     if (!$edit_file_config_entry_exists) {
-        $config_contents[] = $disableMU_disableText; //Append the new snippet to the end of the array
+
+        //Inject our content directly after the ABSPATH variable declaration
+        if ($abspath_line_num > 0) {
+            array_splice($config_contents, $abspath_line_num+1, 0, $disableMU_disableText);
+        } else {
+            disableMU_send_error(__('Could not locate where to inject code in wp-config.php. This operation will not go ahead.', 'disablemu'));
+            return false;
+        }
 
         //Make a backup of the config file
         if (!disableMU_backup_and_rename_wp_config($config_file)) {
